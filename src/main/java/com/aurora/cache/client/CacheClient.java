@@ -72,7 +72,7 @@ public class CacheClient {
     }
 
 
-    public void putAll(Collection<CacheEntry<?>> entries) throws IOException, InterruptedException {
+    public void putAll(Collection<? extends CacheEntry<?>> entries) throws IOException, InterruptedException {
         String requestBody = mapper.writeValueAsString(entries);
         sendRequest(ENDPOINT_PUT_ALL, putTimeout, requestBody);
     }
