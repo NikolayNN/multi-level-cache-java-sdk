@@ -1,20 +1,29 @@
 package com.aurora.cache.client;
 
-import java.io.IOException;
+import com.aurora.cache.client.model.impl.CacheEntry;
+import com.aurora.cache.client.model.impl.CacheEntryHit;
+import com.aurora.cache.client.model.impl.CacheId;
+import com.fasterxml.jackson.databind.JavaType;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import java.io.ByteArrayOutputStream;
-import java.nio.charset.StandardCharsets;
-import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.zip.GZIPOutputStream;
+import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.Collection;
+import java.util.List;
+import java.util.zip.GZIPOutputStream;
 
 public class CacheClient {
+
+    private static final String ENDPOINT_GET_ALL = "/api/v1/cache/get_all";
+    private static final String ENDPOINT_PUT_ALL = "/api/v1/cache/put_all";
+    private static final String ENDPOINT_EVICT_ALL = "/api/v1/cache/evict_all";
+
     private final HttpClient httpClient;
     private final String baseUrl;
     private final ObjectMapper mapper = new ObjectMapper();
@@ -53,87 +62,46 @@ public class CacheClient {
         this.evictTimeout = evictTimeout;
     }
 
-    public <T> T get(String key, Class<T> clazz) throws IOException, InterruptedException {
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(baseUrl + "/cache/" + key))
-                .timeout(getTimeout)
-                .GET()
-                .build();
-        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-        if (response.statusCode() == 200) {
-            return mapper.readValue(response.body(), clazz);
-        }
-        throw new IOException("Unexpected response code " + response.statusCode());
+    public <T> List<CacheEntryHit<T>> getAll(Collection<CacheId> cacheIds, Class<T> clazz) throws IOException, InterruptedException {
+        String requestBody = mapper.writeValueAsString(cacheIds);
+        HttpResponse<String> response = sendRequest(ENDPOINT_GET_ALL, getTimeout, requestBody);
+        JavaType type = mapper.getTypeFactory()
+                .constructCollectionType(List.class,
+                        mapper.getTypeFactory().constructParametricType(CacheEntryHit.class, clazz));
+        return mapper.readValue(response.body(), type);
     }
 
-    public <T> java.util.Map<String, T> getAll(Class<T> clazz) throws IOException, InterruptedException {
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(baseUrl + "/cache/all"))
-                .timeout(getTimeout)
-                .GET()
-                .build();
-        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-        if (response.statusCode() != 200) {
-            throw new IOException("Unexpected response code " + response.statusCode());
-        }
-        return mapper.readValue(
-                response.body(),
-                mapper.getTypeFactory().constructMapType(Map.class, String.class, clazz));
+
+    public void putAll(Collection<CacheEntry<?>> entries) throws IOException, InterruptedException {
+        String requestBody = mapper.writeValueAsString(entries);
+        sendRequest(ENDPOINT_PUT_ALL, putTimeout, requestBody);
     }
 
-    public void put(String key, Object value) throws IOException, InterruptedException {
-        String json = mapper.writeValueAsString(Map.of("key", key, "value", value));
-        post(baseUrl + "/cache", json, putTimeout);
+    public void evictAll(Collection<CacheId> cacheIds) throws IOException, InterruptedException {
+        String requestBody = mapper.writeValueAsString(cacheIds);
+        sendRequest(ENDPOINT_EVICT_ALL, evictTimeout, requestBody);
     }
 
-    public void putAll(java.util.Map<String, ?> entries) throws IOException, InterruptedException {
-        List<Map<String, Object>> list = new ArrayList<>();
-        for (Map.Entry<String, ?> e : entries.entrySet()) {
-            list.add(Map.of("key", e.getKey(), "value", e.getValue()));
-        }
-        String json = mapper.writeValueAsString(list);
-        post(baseUrl + "/cache/all", json, putTimeout);
-    }
-
-    public void evict(String key) throws IOException, InterruptedException {
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(baseUrl + "/cache/" + key))
-                .timeout(evictTimeout)
-                .DELETE()
-                .build();
-        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-        if (response.statusCode() != 200 && response.statusCode() != 204) {
-            throw new IOException("Unexpected response code " + response.statusCode());
-        }
-    }
-
-    public void evictAll() throws IOException, InterruptedException {
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(baseUrl + "/cache/all"))
-                .timeout(evictTimeout)
-                .DELETE()
-                .build();
-        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-        if (response.statusCode() != 200 && response.statusCode() != 204) {
-            throw new IOException("Unexpected response code " + response.statusCode());
-        }
-    }
-
-    private void post(String url, String json, Duration timeout) throws IOException, InterruptedException {
+    public HttpResponse<String> sendRequest(String endpoint, Duration timeout, String requestBody) throws IOException, InterruptedException {
         HttpRequest.Builder builder = HttpRequest.newBuilder()
-                .uri(URI.create(url))
+                .uri(URI.create(baseUrl + endpoint))
                 .timeout(timeout)
                 .header("Content-Type", "application/json");
+
         HttpRequest request = builder
-                .POST(bodyPublisher(json, builder))
+                .POST(gzipBodyPublisher(requestBody, builder))
                 .build();
+
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-        if (response.statusCode() != 200 && response.statusCode() != 201) {
-            throw new IOException("Unexpected response code " + response.statusCode());
+
+        if (response.statusCode() != 200 && response.statusCode() != 204) {
+            throw new IOException("Unexpected response code " + response.statusCode() + ": " + response.body());
         }
+
+        return response;
     }
 
-    private HttpRequest.BodyPublisher bodyPublisher(String json, HttpRequest.Builder builder) throws IOException {
+    private HttpRequest.BodyPublisher gzipBodyPublisher(String json, HttpRequest.Builder builder) throws IOException {
         byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
         if (gzipThreshold > 0 && bytes.length >= gzipThreshold) {
             builder.header("Content-Encoding", "gzip");
@@ -145,6 +113,4 @@ public class CacheClient {
         }
         return HttpRequest.BodyPublishers.ofByteArray(bytes);
     }
-
-    // no manual JSON helpers needed when using Jackson
 }
