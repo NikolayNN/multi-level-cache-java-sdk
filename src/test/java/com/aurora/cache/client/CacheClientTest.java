@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.time.Duration;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -23,7 +24,10 @@ public class CacheClientTest {
     @BeforeEach
     void setUp() {
         httpClient = mock(HttpClient.class);
-        client = new CacheClient("http://localhost", 5, httpClient);
+        client = new CacheClient(
+                "http://localhost", 5,
+                Duration.ofSeconds(1), Duration.ofSeconds(1), Duration.ofSeconds(1),
+                httpClient);
     }
 
     @Test
