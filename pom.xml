@@ -5,7 +5,7 @@
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>com.aurora.perfomance</groupId>
-    <artifactId>aur-cache-client-java</artifactId>
+    <artifactId>multi-level-cache-java-sdk</artifactId>
     <version>1.0-SNAPSHOT</version>
 
     <properties>
